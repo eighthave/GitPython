@@ -398,6 +398,7 @@ class Git(metaclass=_GitMeta):
 
     __slots__ = (
         "_working_dir",
+        "_safe",
         "cat_file_all",
         "cat_file_header",
         "_version_info",
@@ -944,7 +945,7 @@ class Git(metaclass=_GitMeta):
                 self._stream.read(bytes_left + 1)
             # END handle incomplete read
 
-    def __init__(self, working_dir: Union[None, PathLike] = None) -> None:
+    def __init__(self, working_dir: Union[None, PathLike] = None, safe: bool = False) -> None:
         """Initialize this instance with:
 
         :param working_dir:
@@ -952,9 +953,12 @@ class Git(metaclass=_GitMeta):
             directory as returned by :func:`os.getcwd`.
             This is meant to be the working tree directory if available, or the
             ``.git`` directory in case of bare repositories.
+
+        TODO :param safe:
         """
         super().__init__()
         self._working_dir = expand_path(working_dir)
+        self._safe = safe
         self._git_options: Union[List[str], Tuple[str, ...]] = ()
         self._persistent_git_options: List[str] = []
 
@@ -1205,6 +1209,21 @@ class Git(metaclass=_GitMeta):
             If you add additional keyword arguments to the signature of this method, you
             must update the ``execute_kwargs`` variable housed in this module.
         """
+        if self._safe:
+            if isinstance(command, str):
+                command = [command]
+            config_args = [
+                '-c', 'core.askpass=/bin/true',
+                '-c', 'core.hooksPath=/dev/null',
+                '-c', 'core.sshCommand=/bin/true',
+                '-c', 'credential.helper=/bin/true',
+                '-c', 'http.emptyAuth=true',
+                '-c', 'protocol.allow=never',
+                '-c', 'protocol.https.allow=always',
+                '-c', 'url.https://.insteadOf=ssh://',
+            ]
+            command = [command.pop(0)] + config_args + command
+
         # Remove password for the command if present.
         redacted_command = remove_password_if_present(command)
         if self.GIT_PYTHON_TRACE and (self.GIT_PYTHON_TRACE != "full" or as_process):
@@ -1227,6 +1246,12 @@ class Git(metaclass=_GitMeta):
         # just to be sure.
         env["LANGUAGE"] = "C"
         env["LC_ALL"] = "C"
+        # Globally disable things that can execute commands, including password prompts.
+        if self._safe:
+            env['GIT_TERMINAL_PROMPT'] = 'false'
+            env['GIT_ASKPASS'] = '/bin/true'
+            env['SSH_ASKPASS'] = '/bin/true'
+            env['GIT_SSH'] = '/bin/true'
         env.update(self._environment)
         if inline_env is not None:
             env.update(inline_env)
